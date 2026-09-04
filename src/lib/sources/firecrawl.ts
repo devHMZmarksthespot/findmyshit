@@ -39,23 +39,51 @@ async function scrapeOnce(url: string, format: Format): Promise<string> {
   if (apiKey) {
     const { default: Firecrawl } = await import("@mendable/firecrawl-js");
     const app = new Firecrawl({ apiKey });
-    let doc: Record<string, unknown>;
-    try {
-      doc = (await app.scrape(url, { formats: [format] })) as Record<string, unknown>;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (/unauthorized|invalid token|401/i.test(msg)) {
-        throw new Error(
-          `Firecrawl lehnt den Key ab (${msg}). FIRECRAWL_API_KEY prüfen: beginnt mit "fc-", ohne Anführungszeichen, danach neu deployen.`,
-        );
-      }
-      throw err;
-    }
+    const doc = await withRateLimitRetry(
+      () => app.scrape(url, { formats: [format] }) as Promise<Record<string, unknown>>,
+    );
     const content = doc[format];
     if (typeof content !== "string") throw new Error(`Firecrawl lieferte kein ${format} für ${url}`);
     return content;
   }
   return scrapeViaCli(url, format);
+}
+
+const MAX_ATTEMPTS = 4;
+const MAX_WAIT_MS = 65_000;
+
+/**
+ * Firecrawl-Pläne haben ein Limit pro Minute (Hobby: ~10 Anfragen). Bei 429 wird
+ * die von Firecrawl genannte Wartezeit ("retry after 43s") abgewartet und erneut
+ * versucht. Andere Fehler werden sofort weitergereicht.
+ */
+export async function withRateLimitRetry<T>(fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/unauthorized|invalid token|\b401\b/i.test(msg)) {
+        throw new Error(
+          `Firecrawl lehnt den Key ab (${msg}). FIRECRAWL_API_KEY prüfen: beginnt mit "fc-", ohne Anführungszeichen, danach neu deployen.`,
+        );
+      }
+      const rateLimited = /rate limit|\b429\b/i.test(msg);
+      if (!rateLimited || attempt >= MAX_ATTEMPTS) throw err;
+      const seconds = Number(msg.match(/retry after (\d+)\s*s/i)?.[1] ?? 30);
+      const waitMs = Math.min(MAX_WAIT_MS, (seconds + 2) * 1000);
+      // Slot freigeben, damit andere Abrufe nicht hinter dem Wartenden hängen.
+      await releaseSlotWhile(waitMs);
+    }
+  }
+}
+
+async function releaseSlotWhile(ms: number): Promise<void> {
+  active--;
+  waiting.shift()?.();
+  await new Promise((r) => setTimeout(r, ms));
+  if (active >= MAX_PARALLEL) await new Promise<void>((resolve) => waiting.push(resolve));
+  active++;
 }
 
 async function scrapeViaCli(url: string, format: Format): Promise<string> {
