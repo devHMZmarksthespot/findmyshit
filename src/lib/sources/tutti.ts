@@ -1,16 +1,22 @@
 import type { Listing } from "../types";
+import { firecrawlScrape } from "./firecrawl";
 
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36";
 const PAGE_SIZE = 30;
 
+/**
+ * Direkter Abruf funktioniert von Wohn-IPs. Rechenzentrums-IPs (z.B. Vercel)
+ * bekommen von Tutti ein 403, dann wird über Firecrawl geladen.
+ */
 async function fetchHtml(url: string): Promise<string> {
   const res = await fetch(url, {
     headers: { "user-agent": UA, "accept-language": "de-CH,de;q=0.9" },
     cache: "no-store",
   });
-  if (!res.ok) throw new Error(`Tutti antwortet mit HTTP ${res.status} für ${url}`);
-  return res.text();
+  if (res.ok) return res.text();
+  if (res.status === 403 || res.status === 429) return firecrawlScrape(url, "rawHtml");
+  throw new Error(`Tutti antwortet mit HTTP ${res.status} für ${url}`);
 }
 
 interface TuttiNode {
@@ -69,12 +75,16 @@ export async function searchTutti(query: string, maxPages = 2): Promise<Listing[
   const { nodes, totalCount } = extractNodes(first);
   const all = [...nodes];
 
-  const hash = first.match(/https:\/\/www\.tutti\.ch\/de\/q\/suche\/([A-Za-z0-9_-]{8,})/)?.[1];
+  // Tutti bettet die kanonische Such-URL mit Query-Hash ein, z.B. /de/q/suche/<hash> oder /de/q/beizentische/<hash>.
+  // Nur über diese URL funktioniert `?page=N`.
+  const canonical =
+    first.match(/<link rel="canonical" href="(https:\/\/www\.tutti\.ch\/de\/q\/[^"?]+)"/)?.[1] ??
+    first.match(/https:\/\/www\.tutti\.ch\/de\/q\/[a-z0-9-]+\/[A-Za-z0-9_-]{8,}/)?.[0];
   const pages = Math.min(maxPages, Math.ceil(totalCount / PAGE_SIZE));
-  if (hash && pages > 1) {
+  if (canonical && pages > 1) {
     const rest = await Promise.all(
       Array.from({ length: pages - 1 }, (_, i) =>
-        fetchHtml(`https://www.tutti.ch/de/q/suche/${hash}?page=${i + 2}`).then((h) => extractNodes(h).nodes),
+        fetchHtml(`${canonical}?page=${i + 2}`).then((h) => extractNodes(h).nodes),
       ),
     );
     for (const r of rest) all.push(...r);

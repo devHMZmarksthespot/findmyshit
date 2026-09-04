@@ -34,11 +34,23 @@ export function firecrawlScrape(url: string, format: Format): Promise<string> {
 }
 
 async function scrapeOnce(url: string, format: Format): Promise<string> {
-  const apiKey = process.env.FIRECRAWL_API_KEY;
+  // Anführungszeichen und Leerraum abfangen, die beim Einfügen in Vercel/.env leicht mitkommen.
+  const apiKey = process.env.FIRECRAWL_API_KEY?.trim().replace(/^["']|["']$/g, "");
   if (apiKey) {
     const { default: Firecrawl } = await import("@mendable/firecrawl-js");
     const app = new Firecrawl({ apiKey });
-    const doc = (await app.scrape(url, { formats: [format] })) as Record<string, unknown>;
+    let doc: Record<string, unknown>;
+    try {
+      doc = (await app.scrape(url, { formats: [format] })) as Record<string, unknown>;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/unauthorized|invalid token|401/i.test(msg)) {
+        throw new Error(
+          `Firecrawl lehnt den Key ab (${msg}). FIRECRAWL_API_KEY prüfen: beginnt mit "fc-", ohne Anführungszeichen, danach neu deployen.`,
+        );
+      }
+      throw err;
+    }
     const content = doc[format];
     if (typeof content !== "string") throw new Error(`Firecrawl lieferte kein ${format} für ${url}`);
     return content;

@@ -18,6 +18,8 @@ npm run dev                  # http://localhost:3000
 
 Für Ricardo braucht es entweder `FIRECRAWL_API_KEY` oder eine lokal eingeloggte `firecrawl`-CLI. Auf Vercel ist der Key Pflicht.
 
+Tutti blockt Rechenzentrums-IPs (Vercel) mit 403. In dem Fall weicht die App automatisch auf Firecrawl aus. Ein Suchlauf kostet dann etwa 15 bis 25 Firecrawl-Credits (Tutti bis 10, Ricardo 5, Detailseiten bis 8), lokal nur 5 bis 13.
+
 ## Umgebungsvariablen
 
 | Variable | Pflicht | Beschreibung |
