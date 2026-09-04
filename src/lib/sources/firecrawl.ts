@@ -8,12 +8,32 @@ const execFileAsync = promisify(execFile);
 
 type Format = "rawHtml" | "markdown";
 
+/** Firecrawl-Pläne erlauben nur wenige parallele Scrapes (Hobby: 2). Alles darüber wird hier in eine Warteschlange gestellt. */
+const MAX_PARALLEL = Number(process.env.FIRECRAWL_CONCURRENCY ?? 2);
+let active = 0;
+const waiting: Array<() => void> = [];
+
+async function withSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (active >= MAX_PARALLEL) await new Promise<void>((resolve) => waiting.push(resolve));
+  active++;
+  try {
+    return await fn();
+  } finally {
+    active--;
+    waiting.shift()?.();
+  }
+}
+
 /**
  * Holt eine Seite über Firecrawl (nötig für Ricardo wegen Captcha).
  * Bevorzugt das SDK mit FIRECRAWL_API_KEY, fällt sonst auf die lokal
  * eingeloggte `firecrawl`-CLI zurück.
  */
-export async function firecrawlScrape(url: string, format: Format): Promise<string> {
+export function firecrawlScrape(url: string, format: Format): Promise<string> {
+  return withSlot(() => scrapeOnce(url, format));
+}
+
+async function scrapeOnce(url: string, format: Format): Promise<string> {
   const apiKey = process.env.FIRECRAWL_API_KEY;
   if (apiKey) {
     const { default: Firecrawl } = await import("@mendable/firecrawl-js");
